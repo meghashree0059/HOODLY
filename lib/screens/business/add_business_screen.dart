@@ -1,6 +1,8 @@
 import 'dart:io' as io;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/constants/app_constants.dart';
@@ -9,6 +11,7 @@ import '../../widgets/custom_text_field.dart';
 import '../../widgets/custom_app_bar.dart';
 import '../../services/business_service.dart';
 import '../../services/location_service.dart';
+
 
 class AddBusinessScreen extends StatefulWidget {
   final VoidCallback? onBackToHome;
@@ -33,15 +36,17 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
   
   String? _selectedCategory;
   bool _isLocating = false;
+  bool _isGeocoding = false;
   bool _isSubmitting = false;
-  
+
   double? _latitude;
   double? _longitude;
-  
-  // Real uploaded photos list of local file paths
-  final List<String> _uploadedPhotos = [];
+  String? _geocodedLabel;
+  String _lastGeocodedAddress = '';
+  String? _profilePhotoPath;
+  final List<String> _shopPhotoPaths = [];
   final ImagePicker _picker = ImagePicker();
-  
+
   // Categories from Database
   List<String> _categories = [];
   bool _isLoadingCategories = true;
@@ -50,6 +55,20 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
   void initState() {
     super.initState();
     _loadCategories();
+    _addressController.addListener(_onAddressChanged);
+  }
+
+  void _onAddressChanged() {
+    final text = _addressController.text.trim();
+    if (text != _lastGeocodedAddress) {
+      if (_latitude != null || _longitude != null) {
+        setState(() {
+          _latitude = null;
+          _longitude = null;
+          _geocodedLabel = null;
+        });
+      }
+    }
   }
 
   Future<void> _loadCategories() async {
@@ -73,6 +92,7 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
 
   @override
   void dispose() {
+    _addressController.removeListener(_onAddressChanged);
     _nameController.dispose();
     _descriptionController.dispose();
     _addressController.dispose();
@@ -82,15 +102,17 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
   }
 
   void _onUseCurrentLocation() async {
-    setState(() => _isLocating = true);
+    setState(() { _isLocating = true; _geocodedLabel = null; });
     try {
       final position = await LocationService.instance.getCurrentPosition();
       if (position != null) {
         _latitude = position.latitude;
         _longitude = position.longitude;
         final address = await LocationService.instance.getLocalityName(position.latitude, position.longitude);
+        _lastGeocodedAddress = address;
         setState(() {
           _addressController.text = address;
+          _geocodedLabel = '📍 Set to phone GPS: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
         });
       } else {
         if (!mounted) return;
@@ -105,13 +127,43 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
     }
   }
 
-  void _onUploadPhoto() async {
-    if (_uploadedPhotos.length >= 3) {
+  Future<bool> _onGeocodeAddress() async {
+    final address = _addressController.text.trim();
+    if (address.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Maximum 3 photos allowed')),
+        const SnackBar(content: Text('Please enter a business address first.')),
       );
-      return;
+      return false;
     }
+    setState(() { _isGeocoding = true; _geocodedLabel = null; });
+    try {
+      final result = await LocationService.instance.geocodeAddress(address);
+      if (result != null) {
+        _lastGeocodedAddress = address;
+        setState(() {
+          _latitude = result.lat;
+          _longitude = result.lng;
+          _geocodedLabel = '✅ Located on map: (${result.lat.toStringAsFixed(4)}, ${result.lng.toStringAsFixed(4)})';
+        });
+        return true;
+      } else {
+        setState(() {
+          _latitude = null;
+          _longitude = null;
+          _geocodedLabel = '⚠️ Could not resolve this address. Try refining the text or click "Use GPS".';
+        });
+        return false;
+      }
+    } catch (e) {
+      setState(() => _geocodedLabel = '⚠️ Geocoding failed. Try again.');
+      return false;
+    } finally {
+      setState(() => _isGeocoding = false);
+    }
+  }
+
+  void _onUploadProfilePhoto() async {
+    if (!mounted) return;
 
     try {
       final XFile? image = await _picker.pickImage(
@@ -120,43 +172,103 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
       );
       if (image != null) {
         setState(() {
-          _uploadedPhotos.add(image.path);
+          _profilePhotoPath = image.path;
         });
       }
     } catch (e) {
-      debugPrint('Error picking image: $e');
+      debugPrint('Error picking profile image: $e');
     }
   }
 
-  void _onRemovePhoto(int index) {
+  void _onRemoveProfilePhoto() {
     setState(() {
-      _uploadedPhotos.removeAt(index);
+      _profilePhotoPath = null;
+    });
+  }
+
+  void _onUploadShopPhoto() async {
+    if (_shopPhotoPaths.length >= 5) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Maximum 5 shop photos allowed')),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (image != null) {
+        setState(() {
+          _shopPhotoPaths.add(image.path);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error picking shop image: $e');
+    }
+  }
+
+  void _onRemoveShopPhoto(int index) {
+    setState(() {
+      _shopPhotoPaths.removeAt(index);
     });
   }
 
   void _onSubmitListing() async {
+    // Guard against duplicate submissions
+    if (_isSubmitting) return;
     setState(() => _isSubmitting = true);
     try {
+      if (_selectedCategory == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select a business category.'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+        return;
+      }
+
+      if (_latitude == null || _longitude == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please resolve your business address location before submitting.'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+        return;
+      }
+
       await BusinessService.instance.createBusiness(
         name: _nameController.text.trim(),
-        categoryName: _selectedCategory ?? 'Other',
+        categoryName: _selectedCategory!,
         description: _descriptionController.text.trim(),
         address: _addressController.text.trim(),
-        latitude: _latitude ?? 12.9784, // Default to Chennai coords if gps not resolved
-        longitude: _longitude ?? 80.2212,
+        latitude: _latitude!,
+        longitude: _longitude!,
         phone: _phoneController.text.trim(),
         website: _websiteController.text.trim(),
-        localImagePaths: _uploadedPhotos,
+        localProfileImagePath: _profilePhotoPath,
+        localShopImagePaths: _shopPhotoPaths,
       );
-      
+
       if (!mounted) return;
       _showSuccessDialog();
     } catch (e) {
+      debugPrint('AddBusinessScreen._onSubmitListing error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Submission failed: ${e.toString().replaceAll('Exception:', '').trim()}'),
+        const SnackBar(
+          content: Text(
+            'Unable to register your business right now. Please check your connection and try again.',
+          ),
           backgroundColor: AppColors.error,
+          duration: Duration(seconds: 4),
         ),
       );
     } finally {
@@ -166,17 +278,32 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
     }
   }
 
-  void _onNext() {
+  void _onNext() async {
     if (_currentStep == 1) {
-      if (_formKey.currentState?.validate() ?? false) {
-        if (_uploadedPhotos.isEmpty) {
+      if (!(_formKey.currentState?.validate() ?? false)) return;
+      if (_profilePhotoPath == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please upload a business profile photo')),
+        );
+        return;
+      }
+
+      // Automatically resolve location if missing or unconfirmed
+      if (_latitude == null || _longitude == null) {
+        final success = await _onGeocodeAddress();
+        if (!success) {
+          if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Please upload at least one photo')),
+            const SnackBar(
+              content: Text('Could not automatically resolve address. Please click "Resolve Address" or "Use GPS".'),
+              backgroundColor: AppColors.error,
+            ),
           );
           return;
         }
-        setState(() => _currentStep = 2);
       }
+
+      setState(() => _currentStep = 2);
     } else if (_currentStep == 2) {
       setState(() => _currentStep = 3);
     } else {
@@ -404,15 +531,28 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
       key: const ValueKey(1),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Upload Photos Section
+        // 1. Profile Picture Section
         Text(
-          'Upload Photos',
+          'Business Profile Picture (Main Photo)',
           style: AppTextStyles.labelLarge.copyWith(
-            color: AppColors.textSecondary,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w700,
           ),
         ),
-        const SizedBox(height: 10),
-        _buildPhotoUploadGrid(),
+        const SizedBox(height: 8),
+        _buildProfilePhotoPicker(),
+        const SizedBox(height: AppConstants.spaceLG),
+
+        // 2. Shop / Gallery Photos Section
+        Text(
+          'Shop & Gallery Photos (Optional)',
+          style: AppTextStyles.labelLarge.copyWith(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        _buildShopPhotoGrid(),
         const SizedBox(height: AppConstants.spaceLG),
 
         // Business Name
@@ -512,115 +652,264 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
             if (value == null || value.trim().isEmpty) {
               return 'Address is required';
             }
+            if (_latitude == null || _longitude == null) {
+              return 'Please resolve location using GPS or "Resolve Address"';
+            }
             return null;
           },
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
 
-        // Use Current Location Button
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: _isLocating ? null : _onUseCurrentLocation,
-            icon: _isLocating
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                    ),
-                  )
-                : const Icon(Icons.my_location_rounded, size: 16),
-            label: Text(
-              _isLocating ? 'Fetching Location...' : 'Use Current Location',
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+        // Location action buttons row
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 4,
+          children: [
+            TextButton.icon(
+              onPressed: (_isLocating || _isGeocoding) ? null : _onGeocodeAddress,
+              icon: _isGeocoding
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary)))
+                  : const Icon(Icons.search_rounded, size: 16),
+              label: Text(
+                _isGeocoding ? 'Resolving...' : 'Resolve Address',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              ),
             ),
-          ),
+            TextButton.icon(
+              onPressed: (_isLocating || _isGeocoding) ? null : _onUseCurrentLocation,
+              icon: _isLocating
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary)))
+                  : const Icon(Icons.my_location_rounded, size: 16),
+              label: Text(
+                _isLocating ? 'Fetching...' : 'Use GPS',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+            ),
+          ],
         ),
-      ],
-    );
-  }
 
-  Widget _buildPhotoUploadGrid() {
-    return Row(
-      children: [
-        // Uploaded pictures list
-        ...List.generate(_uploadedPhotos.length, (index) {
-          return Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(
-                margin: const EdgeInsets.only(right: 12),
-                width: 76,
-                height: 76,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AppConstants.radiusMD),
-                  border: Border.all(color: AppColors.border),
-                  image: DecorationImage(
-                    image: FileImage(io.File(_uploadedPhotos[index])),
-                    fit: BoxFit.cover,
+        // Geocoded label feedback
+        if (_geocodedLabel != null) ...
+          [
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 4),
+              child: Text(
+                _geocodedLabel!,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: _geocodedLabel!.startsWith('✅') || _geocodedLabel!.startsWith('📍') ? AppColors.success : AppColors.warning,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+
+        // Interactive Map Preview for verification
+        if (_latitude != null && _longitude != null) ...[
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(AppConstants.radiusMD),
+            child: SizedBox(
+              height: 160,
+              child: FlutterMap(
+                options: MapOptions(
+                  initialCenter: LatLng(_latitude!, _longitude!),
+                  initialZoom: 14.5,
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
                   ),
                 ),
-              ),
-              Positioned(
-                top: -6,
-                right: 6,
-                child: GestureDetector(
-                  onTap: () => _onRemovePhoto(index),
-                  child: Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: const BoxDecoration(
-                      color: AppColors.error,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.close_rounded,
-                      color: Colors.white,
-                      size: 14,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        }),
-        // Add Button dashed border box
-        if (_uploadedPhotos.length < 3)
-          GestureDetector(
-            onTap: _onUploadPhoto,
-            child: Container(
-              width: 76,
-              height: 76,
-              decoration: BoxDecoration(
-                color: AppColors.surfaceVariant.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(AppConstants.radiusMD),
-                border: Border.all(
-                  color: AppColors.primary.withValues(alpha: 0.4),
-                  style: BorderStyle.solid,
-                  width: 1.5,
-                ),
-              ),
-              child: const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.add_a_photo_rounded, color: AppColors.primary, size: 24),
-                  SizedBox(height: 4),
-                  Text(
-                    'Add Photo',
-                    style: TextStyle(
-                      fontSize: 9,
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  TileLayer(
+                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'com.hoodly.app',
+                  ),
+                  MarkerLayer(
+                    markers: [
+                      Marker(
+                        point: LatLng(_latitude!, _longitude!),
+                        width: 40,
+                        height: 40,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.primary.withValues(alpha: 0.4),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              )
+                            ],
+                          ),
+                          child: const Icon(Icons.storefront_rounded, color: Colors.white, size: 20),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
           ),
+        ],
       ],
     );
   }
+
+  Widget _buildProfilePhotoPicker() {
+    if (_profilePhotoPath != null) {
+      return Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 100,
+            height: 100,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppConstants.radiusLG),
+              border: Border.all(color: AppColors.primary, width: 2),
+              image: DecorationImage(
+                image: FileImage(io.File(_profilePhotoPath!)),
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
+          Positioned(
+            top: -8,
+            right: -8,
+            child: GestureDetector(
+              onTap: _onRemoveProfilePhoto,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: const BoxDecoration(
+                  color: AppColors.error,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.close_rounded,
+                  color: Colors.white,
+                  size: 14,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return GestureDetector(
+      onTap: _onUploadProfilePhoto,
+      child: Container(
+        width: 100,
+        height: 100,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceVariant.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(AppConstants.radiusLG),
+          border: Border.all(
+            color: AppColors.primary.withValues(alpha: 0.4),
+            width: 1.5,
+          ),
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.add_a_photo_rounded, color: AppColors.primary, size: 28),
+            SizedBox(height: 4),
+            Text(
+              'Profile Photo',
+              style: TextStyle(
+                fontSize: 10,
+                color: AppColors.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildShopPhotoGrid() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          ...List.generate(_shopPhotoPaths.length, (index) {
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(right: 12),
+                  width: 76,
+                  height: 76,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(AppConstants.radiusMD),
+                    border: Border.all(color: AppColors.border),
+                    image: DecorationImage(
+                      image: FileImage(io.File(_shopPhotoPaths[index])),
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: -6,
+                  right: 6,
+                  child: GestureDetector(
+                    onTap: () => _onRemoveShopPhoto(index),
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: const BoxDecoration(
+                        color: AppColors.error,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white,
+                        size: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }),
+          if (_shopPhotoPaths.length < 5)
+            GestureDetector(
+              onTap: _onUploadShopPhoto,
+              child: Container(
+                width: 76,
+                height: 76,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceVariant.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(AppConstants.radiusMD),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.4),
+                    width: 1.5,
+                  ),
+                ),
+                child: const Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.add_photo_alternate_rounded, color: AppColors.primary, size: 24),
+                    SizedBox(height: 4),
+                    Text(
+                      'Add Shop Photo',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+
 
   Widget _buildStep2ContactInfo() {
     return Column(
@@ -699,26 +988,34 @@ class _AddBusinessScreenState extends State<AddBusinessScreen> {
         ),
         const SizedBox(height: AppConstants.spaceMD),
         
-        // Photos Row
-        SizedBox(
-          height: 80,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            itemCount: _uploadedPhotos.length,
-            itemBuilder: (context, index) {
-              return Container(
-                margin: const EdgeInsets.only(right: 8),
-                width: 80,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AppConstants.radiusMD),
-                  image: DecorationImage(
-                    image: FileImage(io.File(_uploadedPhotos[index])),
-                    fit: BoxFit.cover,
-                  ),
-                ),
-              );
-            },
-          ),
+        // Photos Row (Profile + Shop photos)
+        Builder(
+          builder: (context) {
+            final allReviewPhotos = [
+              ?_profilePhotoPath,
+              ..._shopPhotoPaths,
+            ];
+            return SizedBox(
+              height: 80,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: allReviewPhotos.length,
+                itemBuilder: (context, index) {
+                  return Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    width: 80,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(AppConstants.radiusMD),
+                      image: DecorationImage(
+                        image: FileImage(io.File(allReviewPhotos[index])),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            );
+          },
         ),
         const SizedBox(height: AppConstants.spaceMD),
 

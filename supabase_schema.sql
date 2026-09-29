@@ -190,3 +190,79 @@ create policy "Allow users to delete their own business images"
   on storage.objects for delete
   to authenticated
   using (bucket_id = 'business-images' and auth.uid()::text = owner);
+
+-- ── 6. COMMUNITY SERVICES (POSTS & CATEGORIES) ──────────────────────────
+create table if not exists public.community_service_categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_at timestamptz not null default now()
+);
+
+alter table public.community_service_categories enable row level security;
+
+create policy "Allow read access to community categories"
+  on public.community_service_categories for select
+  to authenticated
+  using (true);
+
+insert into public.community_service_categories (name) values
+  ('Tutoring'),
+  ('Babysitting'),
+  ('Plumbing'),
+  ('Electrical'),
+  ('Cleaning'),
+  ('Pet Care'),
+  ('Cooking'),
+  ('Music & Arts'),
+  ('Gardening'),
+  ('Delivery'),
+  ('Repairs'),
+  ('Other')
+on conflict (name) do nothing;
+
+create table if not exists public.community_posts (
+  id uuid primary key default gen_random_uuid(),
+  author_id uuid references auth.users(id) on delete cascade not null,
+  author_name text default '',
+  author_avatar_url text default '',
+  title text not null,
+  description text not null,
+  category text default 'General',
+  category_id uuid references public.community_service_categories(id) on delete set null,
+  post_type text not null check (post_type in ('offering', 'requesting')),
+  fee_payment text not null default 'Free',
+  contact_method text not null default 'both' check (contact_method in ('both', 'phone', 'email')),
+  contact_phone text default '',
+  contact_email text default '',
+  address text not null default '',
+  latitude double precision not null default 0.0,
+  longitude double precision not null default 0.0,
+  photo_urls text[] not null default '{}',
+  status text not null default 'active' check (status in ('active', 'closed', 'expired', 'draft')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.community_posts enable row level security;
+
+create policy "Allow read access to community posts"
+  on public.community_posts for select
+  to authenticated
+  using (true);
+
+create policy "Allow authenticated users to create community posts"
+  on public.community_posts for insert
+  to authenticated
+  with check (auth.uid() = author_id);
+
+create policy "Allow authors to update their own community posts"
+  on public.community_posts for update
+  to authenticated
+  using (auth.uid() = author_id)
+  with check (auth.uid() = author_id);
+
+create policy "Allow authors to delete their own community posts"
+  on public.community_posts for delete
+  to authenticated
+  using (auth.uid() = author_id);
+

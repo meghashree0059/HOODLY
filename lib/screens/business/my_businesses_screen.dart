@@ -7,6 +7,7 @@ import '../../routes/app_routes.dart';
 import '../../services/business_service.dart';
 import '../../models/business_model.dart';
 import '../../widgets/custom_app_bar.dart';
+import '../../widgets/hoodly_image.dart';
 import 'add_business_screen.dart';
 
 class MyBusinessesScreen extends StatefulWidget {
@@ -54,14 +55,16 @@ class _MyBusinessesScreenState extends State<MyBusinessesScreen> {
         ),
       );
     } catch (e) {
+      debugPrint('MyBusinessesScreen._toggleBusinessStatus error: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to update listing: $e'),
+        const SnackBar(
+          content: Text('Unable to update listing status. Please try again.'),
           backgroundColor: AppColors.error,
         ),
       );
-      setState(() => _isLoading = false);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -163,23 +166,24 @@ class _MyBusinessesScreenState extends State<MyBusinessesScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // Image Thumbnail
-                      Container(
-                        width: 70,
-                        height: 70,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(AppConstants.radiusMD),
-                          border: Border.all(color: AppColors.border),
-                          image: item.imageUrl != null
-                              ? DecorationImage(
-                                  image: NetworkImage(item.imageUrl!),
-                                  fit: BoxFit.cover,
-                                )
-                              : null,
-                          color: AppColors.surfaceVariant,
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusMD),
+                        child: Container(
+                          width: 70,
+                          height: 70,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(AppConstants.radiusMD),
+                            border: Border.all(color: AppColors.border),
+                            color: AppColors.surfaceVariant,
+                          ),
+                          child: HoodlyImage(
+                            imageUrl: item.imageUrl,
+                            fit: BoxFit.cover,
+                            fallbackWidget: const Center(
+                              child: Icon(Icons.storefront_rounded, color: AppColors.textHint),
+                            ),
+                          ),
                         ),
-                        child: item.imageUrl == null
-                            ? const Icon(Icons.storefront_rounded, color: AppColors.textHint)
-                            : null,
                       ),
                       const SizedBox(width: AppConstants.spaceMD),
                       // Information
@@ -228,8 +232,9 @@ class _MyBusinessesScreenState extends State<MyBusinessesScreen> {
                     ],
                   ),
                   const Divider(height: 24),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 8,
                     children: [
                       // Edit Button
                       TextButton.icon(
@@ -239,7 +244,6 @@ class _MyBusinessesScreenState extends State<MyBusinessesScreen> {
                         icon: const Icon(Icons.edit_rounded, size: 16),
                         label: const Text('Edit'),
                       ),
-                      const SizedBox(width: 8),
                       // Toggle active button
                       TextButton.icon(
                         onPressed: () => _toggleBusinessStatus(item),

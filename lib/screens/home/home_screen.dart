@@ -9,10 +9,14 @@ import '../../widgets/section_title.dart';
 import '../../widgets/bottom_nav_bar.dart';
 import '../../widgets/business_card.dart';
 import '../../models/business_model.dart';
+import '../../models/community_post_model.dart';
 import '../../services/business_service.dart';
+import '../../services/community_service.dart';
 import '../../services/location_service.dart';
+import '../../widgets/community_post_card.dart';
 
 import '../business/add_business_screen.dart';
+import '../community/community_services_screen.dart';
 import '../profile/profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -24,10 +28,13 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentNavIndex = 0;
+  final GlobalKey<CommunityServicesScreenState> _communityServicesKey =
+      GlobalKey<CommunityServicesScreenState>();
 
   // Location
   Position? _userPosition;
   String _locationLabel = 'Fetching location...';
+  bool _locationPermanentlyDenied = false;
 
   // Categories
   List<Map<String, dynamic>> _dbCategories = [];
@@ -38,6 +45,11 @@ class _HomeScreenState extends State<HomeScreen> {
   List<BusinessModel> _businesses = [];
   bool _isLoadingBusinesses = true;
   String? _businessError;
+
+  // Community Posts
+  List<CommunityPostModel> _communityPosts = [];
+  bool _isLoadingCommunity = true;
+  String? _communityError;
 
   // Search
   final TextEditingController _searchController = TextEditingController();
@@ -78,9 +90,13 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _initLocation();
     _loadCategories();
     _searchController.addListener(_onSearchChanged);
+
+    // Trigger location permission (real Android OS dialog) after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _initLocation();
+    });
   }
 
   @override
@@ -102,26 +118,50 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initLocation() async {
+    // Check OS permission first, request if needed (triggers real Android system dialog)
+    final perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.deniedForever) {
+      if (mounted) {
+        setState(() {
+          _locationPermanentlyDenied = true;
+          _locationLabel = 'Location access blocked';
+        });
+      }
+      return;
+    }
+
     try {
       final position = await LocationService.instance.getCurrentPosition();
       if (position != null) {
-        final label = await LocationService.instance.getLocalityName(position.latitude, position.longitude);
-        setState(() {
-          _userPosition = position;
-          _locationLabel = label;
-        });
+        final label = await LocationService.instance.getLocalityName(
+            position.latitude, position.longitude);
+        if (mounted) {
+          setState(() {
+            _userPosition = position;
+            _locationLabel = label;
+            _locationPermanentlyDenied = false;
+          });
+        }
       } else {
+        if (mounted) {
+          setState(() {
+            _locationLabel = 'Location unavailable';
+          });
+        }
+      }
+      // Load businesses and community posts after location resolves
+      if (mounted) {
+        _loadBusinesses();
+        _loadCommunityPosts();
+      }
+    } catch (e) {
+      if (mounted) {
         setState(() {
           _locationLabel = 'Location unavailable';
         });
+        _loadBusinesses();
+        _loadCommunityPosts();
       }
-      // Load businesses after location resolves
-      _loadBusinesses();
-    } catch (e) {
-      setState(() {
-        _locationLabel = 'Location unavailable';
-      });
-      _loadBusinesses();
     }
   }
 
@@ -159,6 +199,33 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _loadCommunityPosts() async {
+    setState(() {
+      _isLoadingCommunity = true;
+      _communityError = null;
+    });
+
+    try {
+      final posts = await CommunityService.instance.getPosts(
+        userLatitude: _userPosition?.latitude,
+        userLongitude: _userPosition?.longitude,
+      );
+      if (mounted) {
+        setState(() {
+          _communityPosts = posts;
+          _isLoadingCommunity = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _communityError = 'Failed to load community services.';
+          _isLoadingCommunity = false;
+        });
+      }
+    }
+  }
+
   void _onCategoryTap(String? categoryId, String? categoryName) {
     setState(() {
       _selectedCategoryId = categoryId;
@@ -188,15 +255,22 @@ class _HomeScreenState extends State<HomeScreen> {
               _loadBusinesses();
             },
           ),
-          // Index 3: Bookmarks Page (Placeholder for Phase 3)
-          _buildPlaceholderPage(Icons.bookmark_rounded, 'Saved Businesses. Your bookmarked spots will appear here.'),
+          // Index 3: Community Services Page
+          CommunityServicesScreen(key: _communityServicesKey),
           // Index 4: Profile Page
           const ProfileScreen(),
         ],
       ),
       bottomNavigationBar: HoodlyBottomNavBar(
         currentIndex: _currentNavIndex,
-        onTap: (i) => setState(() => _currentNavIndex = i),
+        onTap: (i) {
+          setState(() => _currentNavIndex = i);
+          if (i == 0) {
+            _loadCommunityPosts();
+          } else if (i == 3) {
+            _communityServicesKey.currentState?.reload();
+          }
+        },
       ),
     );
   }
@@ -207,6 +281,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onRefresh: () async {
           await _initLocation();
           await _loadCategories();
+          await _loadCommunityPosts();
         },
         color: AppColors.primary,
         child: CustomScrollView(
@@ -223,51 +298,60 @@ class _HomeScreenState extends State<HomeScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     // Location Picker
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.1),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.location_on_rounded,
-                            color: AppColors.primary,
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Current Location',
-                              style: AppTextStyles.labelMedium.copyWith(
-                                color: AppColors.textSecondary,
-                                fontSize: 11,
-                              ),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.1),
+                              shape: BoxShape.circle,
                             ),
-                            Row(
+                            child: const Icon(
+                              Icons.location_on_rounded,
+                              color: AppColors.primary,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  _locationLabel,
-                                  style: AppTextStyles.titleMedium.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.textPrimary,
+                                  'Current Location',
+                                  style: AppTextStyles.labelMedium.copyWith(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 11,
                                   ),
                                 ),
-                                const Icon(
-                                  Icons.keyboard_arrow_down_rounded,
-                                  color: AppColors.textPrimary,
-                                  size: 18,
+                                Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        _locationLabel,
+                                        style: AppTextStyles.titleMedium.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.textPrimary,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                      color: AppColors.textPrimary,
+                                      size: 18,
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
-                          ],
-                        ),
-                      ],
+                          ),
+                        ],
+                      ),
                     ),
+                    const SizedBox(width: 12),
                     // Notification Icon
                     Container(
                       decoration: BoxDecoration(
@@ -499,6 +583,116 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
 
+            const SliverToBoxAdapter(child: SizedBox(height: AppConstants.spaceXL)),
+
+            // 7. Community Services Section Title
+            SliverToBoxAdapter(
+              child: SectionTitle(
+                title: 'Community Services',
+                seeAllLabel: 'See All',
+                onSeeAll: () {
+                  setState(() => _currentNavIndex = 3);
+                },
+                padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPaddingH),
+              ),
+            ),
+
+            const SliverToBoxAdapter(child: SizedBox(height: AppConstants.spaceSM)),
+
+            // 8. Community Services Cards
+            if (_isLoadingCommunity)
+              const SliverToBoxAdapter(
+                child: SizedBox(
+                  height: 120,
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF1BA97F)),
+                    ),
+                  ),
+                ),
+              )
+            else if (_communityError != null)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPaddingH),
+                  child: Text(
+                    _communityError!,
+                    style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSecondary),
+                  ),
+                ),
+              )
+            else if (_communityPosts.isEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPaddingH),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(AppConstants.radiusLG),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1BA97F).withValues(alpha: 0.12),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.groups_rounded, color: Color(0xFF1BA97F), size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'No community posts nearby yet',
+                                style: AppTextStyles.labelMedium.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              Text(
+                                'Offer or request help from your neighbours.',
+                                style: AppTextStyles.bodySmall.copyWith(color: AppColors.textSecondary, fontSize: 11),
+                              ),
+                            ],
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => setState(() => _currentNavIndex = 3),
+                          child: const Text('Browse', style: TextStyle(color: Color(0xFF1BA97F))),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            else
+              SliverToBoxAdapter(
+                child: SizedBox(
+                  height: 135,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(horizontal: AppConstants.screenPaddingH),
+                    itemCount: _communityPosts.length,
+                    itemBuilder: (context, index) {
+                      final post = _communityPosts[index];
+                      return Padding(
+                        padding: const EdgeInsets.only(right: AppConstants.spaceMD),
+                        child: CommunityPostCard(
+                          post: post,
+                          compact: true,
+                          onTap: () {
+                            context.push('/community/${post.id}');
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+
             const SliverToBoxAdapter(child: SizedBox(height: AppConstants.space4XL)),
           ],
         ),
@@ -597,6 +791,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildEmptyState() {
+    final bool isLocationMissing = _userPosition == null;
     return Padding(
       padding: const EdgeInsets.all(AppConstants.screenPaddingH),
       child: Column(
@@ -604,14 +799,65 @@ class _HomeScreenState extends State<HomeScreen> {
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), shape: BoxShape.circle),
-            child: const Icon(Icons.search_off_rounded, color: AppColors.primary, size: 40),
+            child: Icon(
+              isLocationMissing ? Icons.location_off_rounded : Icons.search_off_rounded,
+              color: AppColors.primary,
+              size: 40,
+            ),
           ),
           const SizedBox(height: AppConstants.spaceMD),
           Text(
-            _searchQuery.isNotEmpty ? 'No results for "$_searchQuery"' : 'No businesses found in this area',
+            isLocationMissing
+                ? (_locationPermanentlyDenied
+                    ? 'Location Access Blocked'
+                    : 'Location Access Required')
+                : _searchQuery.isNotEmpty
+                    ? 'No results for "$_searchQuery"'
+                    : 'No businesses found within 5 km',
+            textAlign: TextAlign.center,
+            style: AppTextStyles.titleMedium.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: AppConstants.spaceXS),
+          Text(
+            isLocationMissing
+                ? (_locationPermanentlyDenied
+                    ? 'Location access was permanently denied. Open App Settings, enable location for Hoodly, then return.'
+                    : 'Hoodly needs your location to discover local businesses within 5 km. Please allow location access.')
+                : 'Try adjusting your search query or selecting a different category.',
             textAlign: TextAlign.center,
             style: AppTextStyles.bodyMedium.copyWith(color: AppColors.textSecondary),
           ),
+          if (isLocationMissing) ...[
+            const SizedBox(height: AppConstants.spaceMD),
+            if (_locationPermanentlyDenied)
+              ElevatedButton.icon(
+                onPressed: () async {
+                  await Geolocator.openAppSettings();
+                  // Re-check permission when user returns from Settings
+                  if (mounted) await _initLocation();
+                },
+                icon: const Icon(Icons.settings_rounded, size: 18),
+                label: const Text('Open App Settings'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppConstants.radiusMD)),
+                ),
+              )
+            else
+              ElevatedButton.icon(
+                onPressed: () async {
+                  await _initLocation();
+                },
+                icon: const Icon(Icons.my_location_rounded, size: 18),
+                label: const Text('Allow Location'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppConstants.radiusMD)),
+                ),
+              ),
+          ],
         ],
       ),
     );
@@ -673,28 +919,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           },
                         ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPlaceholderPage(IconData icon, String message) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppConstants.screenPaddingH),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.1), shape: BoxShape.circle),
-              child: Icon(icon, color: AppColors.primary, size: 48),
-            ),
-            const SizedBox(height: AppConstants.spaceLG),
-            Text('Coming Soon', style: AppTextStyles.headingMedium.copyWith(fontWeight: FontWeight.w800)),
-            const SizedBox(height: AppConstants.spaceSM),
-            Text(message, textAlign: TextAlign.center, style: AppTextStyles.bodyMedium.copyWith(color: AppColors.textSecondary)),
           ],
         ),
       ),

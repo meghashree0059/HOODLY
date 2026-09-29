@@ -59,7 +59,12 @@ class SectionTitle extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(title, style: AppTextStyles.headingSmall),
+                      Text(
+                        title,
+                        style: AppTextStyles.headingSmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       if (subtitle != null) ...[
                         const SizedBox(height: 2),
                         Text(

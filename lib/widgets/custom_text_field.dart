@@ -24,6 +24,8 @@ class HoodlyTextField extends StatefulWidget {
   final String? helperText;
   final TextInputType keyboardType;
   final bool obscureText;
+  final bool autocorrect;
+  final bool enableSuggestions;
   final bool autofocus;
   final bool readOnly;
   final bool enabled;
@@ -49,6 +51,8 @@ class HoodlyTextField extends StatefulWidget {
     this.helperText,
     this.keyboardType = TextInputType.text,
     this.obscureText = false,
+    this.autocorrect = true,
+    this.enableSuggestions = true,
     this.autofocus = false,
     this.readOnly = false,
     this.enabled = true,
@@ -113,6 +117,8 @@ class _HoodlyTextFieldState extends State<HoodlyTextField> {
           controller: widget.controller,
           focusNode: _focusNode,
           obscureText: _obscureText,
+          autocorrect: widget.obscureText ? false : widget.autocorrect,
+          enableSuggestions: widget.obscureText ? false : widget.enableSuggestions,
           keyboardType: widget.keyboardType,
           autofocus: widget.autofocus,
           readOnly: widget.readOnly,

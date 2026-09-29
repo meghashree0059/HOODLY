@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
@@ -10,6 +11,7 @@ import '../../widgets/custom_text_field.dart';
 import '../../widgets/custom_app_bar.dart';
 import '../../routes/app_routes.dart';
 import '../../services/auth_service.dart';
+
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -40,17 +42,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() => _isLoading = true);
     try {
       await AuthService.instance.createUserWithEmailAndPassword(
-        email: _emailController.text,
+        email: _emailController.text.trim(),
         password: _passwordController.text,
-        fullName: _nameController.text,
+        fullName: _nameController.text.trim(),
       );
       if (!mounted) return;
-      context.go(AppRoutes.home);
+
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) {
+        // Email confirmation is required by Supabase project configuration
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Account created! Please check your email to confirm your account before logging in.'),
+            backgroundColor: AppColors.primary,
+            duration: Duration(seconds: 5),
+          ),
+        );
+        context.go(AppRoutes.login);
+      } else {
+        context.go(AppRoutes.home);
+      }
     } catch (e) {
       if (!mounted) return;
+      final errorMessage = AppValidators.formatAuthError(e);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(e.toString().replaceAll('Exception:', '').trim()),
+          content: Text(errorMessage),
           backgroundColor: AppColors.error,
         ),
       );
@@ -122,9 +139,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   hint: AppStrings.hintConfirmPassword,
                   obscureText: true,
                   prefixIcon: Icons.lock_outline_rounded,
-                  validator: AppValidators.confirmPassword(
-                    _passwordController.text,
-                  ),
+                  validator: (value) {
+                    final password = _passwordController.text;
+                    final confirmPassword = _confirmPasswordController.text;
+                    if (confirmPassword.isEmpty) {
+                      return AppStrings.validPasswordRequired;
+                    }
+                    if (confirmPassword != password) {
+                      return AppStrings.validPasswordMismatch;
+                    }
+                    return null;
+                  },
                   textInputAction: TextInputAction.done,
                 ),
                 const SizedBox(height: AppConstants.spaceXXL),

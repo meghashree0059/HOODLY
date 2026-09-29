@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/constants/app_constants.dart';
@@ -46,6 +48,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final phoneController = TextEditingController(text: _user!.phone ?? '');
     final formKey = GlobalKey<FormState>();
     bool isSaving = false;
+    bool isUploadingPhoto = false;
+    // Local copy of avatar URL for the sheet so changes preview immediately
+    String? sheetAvatarUrl = _user!.avatarUrl;
 
     showModalBottomSheet(
       context: context,
@@ -54,6 +59,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setSheetState) {
+            // ── Avatar picker section ─────────────────────────────
+            Future<void> pickAndUploadAvatar() async {
+              final picker = ImagePicker();
+              final picked = await picker.pickImage(
+                source: ImageSource.gallery,
+                maxWidth: 512,
+                maxHeight: 512,
+                imageQuality: 85,
+              );
+              if (picked == null) return;
+
+              setSheetState(() => isUploadingPhoto = true);
+              try {
+                final updated = await AuthService.instance
+                    .uploadAndSetAvatar(File(picked.path));
+                setSheetState(() {
+                  sheetAvatarUrl = updated.avatarUrl;
+                  isUploadingPhoto = false;
+                });
+                // Reflect immediately in the main profile screen
+                setState(() => _user = updated);
+              } catch (e) {
+                setSheetState(() => isUploadingPhoto = false);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Photo upload failed: $e'),
+                      backgroundColor: AppColors.error,
+                    ),
+                  );
+                }
+              }
+            }
+
             return Container(
               decoration: const BoxDecoration(
                 color: AppColors.background,
@@ -75,9 +114,107 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   children: [
                     Text(
                       'Edit Profile',
-                      style: AppTextStyles.headingMedium.copyWith(fontWeight: FontWeight.bold),
+                      style: AppTextStyles.headingMedium
+                          .copyWith(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: AppConstants.spaceMD),
+
+                    // ── Avatar preview + change button ────────────────
+                    Center(
+                      child: Column(
+                        children: [
+                          Stack(
+                            alignment: Alignment.bottomRight,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: AppColors.primary.withValues(alpha: 0.3),
+                                    width: 2,
+                                  ),
+                                ),
+                                child: CircleAvatar(
+                                  radius: 40,
+                                  backgroundColor: AppColors.surfaceVariant,
+                                  backgroundImage:
+                                      (sheetAvatarUrl != null &&
+                                              sheetAvatarUrl!.isNotEmpty)
+                                          ? NetworkImage(sheetAvatarUrl!)
+                                          : null,
+                                  child: (sheetAvatarUrl == null ||
+                                          sheetAvatarUrl!.isEmpty)
+                                      ? const Icon(
+                                          Icons.person_rounded,
+                                          size: 42,
+                                          color: AppColors.textHint,
+                                        )
+                                      : null,
+                                ),
+                              ),
+                              if (isUploadingPhoto)
+                                Positioned.fill(
+                                  child: Container(
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.black38,
+                                    ),
+                                    child: const Center(
+                                      child: SizedBox(
+                                        width: 22,
+                                        height: 22,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                  Colors.white),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (!isUploadingPhoto)
+                                GestureDetector(
+                                  onTap: pickAndUploadAvatar,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primary,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                          color: Colors.white, width: 2),
+                                    ),
+                                    child: const Icon(
+                                      Icons.camera_alt_rounded,
+                                      size: 14,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          GestureDetector(
+                            onTap: isUploadingPhoto ? null : pickAndUploadAvatar,
+                            child: Text(
+                              'Change Photo',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: isUploadingPhoto
+                                    ? AppColors.textHint
+                                    : AppColors.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: AppConstants.spaceMD),
+
+                    // ── Name field ────────────────────────────────────
                     HoodlyTextField(
                       controller: nameController,
                       label: 'Full Name',
@@ -92,6 +229,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       },
                     ),
                     const SizedBox(height: AppConstants.spaceMD),
+
+                    // ── Phone field ───────────────────────────────────
                     HoodlyTextField(
                       controller: phoneController,
                       label: 'Phone Number',
@@ -100,6 +239,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       keyboardType: TextInputType.phone,
                     ),
                     const SizedBox(height: AppConstants.spaceXL),
+
+                    // ── Actions ───────────────────────────────────────
                     Row(
                       children: [
                         Expanded(
@@ -116,32 +257,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             onPressed: isSaving
                                 ? null
                                 : () async {
-                                    if (!(formKey.currentState?.validate() ?? false)) return;
+                                    if (!(formKey.currentState?.validate() ??
+                                        false)) { return; }
 
                                     setSheetState(() => isSaving = true);
                                     final nav = Navigator.of(context);
-                                    final messenger = ScaffoldMessenger.of(context);
+                                    final messenger =
+                                        ScaffoldMessenger.of(context);
                                     try {
-                                      final updated = await AuthService.instance.updateProfile(
+                                      final updated =
+                                          await AuthService.instance
+                                              .updateProfile(
                                         fullName: nameController.text.trim(),
                                         phone: phoneController.text.trim(),
                                       );
                                       setState(() {
                                         _user = updated;
                                       });
-                                      if (!mounted) return;
+                                      if (!context.mounted) return;
                                       nav.pop();
                                       messenger.showSnackBar(
                                         const SnackBar(
-                                          content: Text('Profile updated successfully!'),
+                                          content: Text(
+                                              'Profile updated successfully!'),
                                           backgroundColor: AppColors.success,
                                         ),
                                       );
                                     } catch (e) {
-                                      if (!mounted) return;
+                                      if (!context.mounted) return;
                                       messenger.showSnackBar(
                                         SnackBar(
-                                          content: Text('Update failed: $e'),
+                                          content:
+                                              Text('Update failed: $e'),
                                           backgroundColor: AppColors.error,
                                         ),
                                       );
@@ -149,7 +296,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       setSheetState(() => isSaving = false);
                                     }
                                   },
-                        ),
+                          ),
                         ),
                       ],
                     ),
@@ -187,7 +334,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               // 1. Premium Purple Gradient Header
               _buildProfileHeader(context),
-              
+
               const SizedBox(height: AppConstants.spaceLG),
 
               // 2. Options List
@@ -214,6 +361,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             subtitle: 'Manage your listed stores and services',
                             onTap: () {
                               context.push(AppRoutes.myBusinesses);
+                            },
+                          ),
+                          _buildOptionTile(
+                            icon: Icons.groups_outlined,
+                            title: 'My Community Posts',
+                            subtitle: 'Manage your offerings and requests',
+                            onTap: () {
+                              context.push(AppRoutes.myCommunityPosts);
                             },
                           ),
                         ]),
@@ -251,7 +406,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             },
                           ),
                         ]),
-                        
+
                         const SizedBox(height: AppConstants.space4XL),
                       ],
                     ),
@@ -270,7 +425,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final name = _user?.fullName ?? 'Hoodly User';
     final email = _user?.email ?? '';
     final phone = _user?.phone ?? 'No phone provided';
-    final avatarUrl = _user?.avatarUrl ?? 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200';
+    final avatarUrl = _user?.avatarUrl;
 
     return Container(
       width: double.infinity,
@@ -310,29 +465,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           const SizedBox(height: AppConstants.spaceXL),
-          
-          // Avatar
-          Container(
-            padding: const EdgeInsets.all(4),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black12,
-                  blurRadius: 10,
-                  offset: Offset(0, 4),
-                ),
-              ],
-            ),
-            child: CircleAvatar(
-              radius: 46,
-              backgroundColor: AppColors.surfaceVariant,
-              backgroundImage: NetworkImage(avatarUrl),
+
+          // Avatar — network photo if set, otherwise neutral icon
+          GestureDetector(
+            onTap: () => _showEditProfileBottomSheet(context),
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 10,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: CircleAvatar(
+                radius: 46,
+                backgroundColor: const Color(0xFFEDE9FE),
+                backgroundImage: (avatarUrl != null && avatarUrl.isNotEmpty)
+                    ? NetworkImage(avatarUrl)
+                    : null,
+                child: (avatarUrl != null && avatarUrl.isNotEmpty)
+                    ? null
+                    : const Icon(
+                        Icons.person_rounded,
+                        size: 48,
+                        color: AppColors.primary,
+                      ),
+              ),
             ),
           ),
           const SizedBox(height: AppConstants.spaceMD),
-          
+
           // Name
           Text(
             name,
@@ -352,7 +519,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
           const SizedBox(height: 6),
-          
+
           // Phone
           Row(
             mainAxisAlignment: MainAxisAlignment.center,

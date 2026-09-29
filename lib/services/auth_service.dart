@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/user_model.dart';
 import 'storage_service.dart';
+import 'community_service.dart';
 
 /// Abstract authentication service interface.
 abstract class AuthService {
@@ -10,6 +12,15 @@ abstract class AuthService {
 
   /// Returns the currently signed-in user, or null if not authenticated.
   Future<UserModel?> get currentUser;
+
+  /// Supabase Auth user ID for the active session (`auth.uid()`), or null.
+  String? get authUserId;
+
+  /// Active Supabase session, if any.
+  Session? get currentSession;
+
+  /// Whether a non-expired Supabase session exists.
+  bool get isAuthenticated;
 
   /// Stream of authentication state changes.
   Stream<UserModel?> get authStateChanges;
@@ -41,6 +52,10 @@ abstract class AuthService {
     String? role,
   });
 
+  /// Upload [file] as the user's avatar and save the URL to their profile.
+  /// Returns the updated [UserModel].
+  Future<UserModel> uploadAndSetAvatar(File file);
+
   /// Delete the current user's account.
   Future<void> deleteAccount();
 }
@@ -50,7 +65,21 @@ class SupabaseAuthService implements AuthService {
   final _supabase = Supabase.instance.client;
 
   @override
+  String? get authUserId => _supabase.auth.currentUser?.id;
+
+  @override
+  Session? get currentSession {
+    final session = _supabase.auth.currentSession;
+    if (session == null || session.isExpired) return null;
+    return session;
+  }
+
+  @override
+  bool get isAuthenticated => currentSession != null;
+
+  @override
   Future<UserModel?> get currentUser async {
+    if (!isAuthenticated) return null;
     final user = _supabase.auth.currentUser;
     if (user == null) return null;
 
@@ -105,20 +134,38 @@ class SupabaseAuthService implements AuthService {
     required String email,
     required String password,
   }) async {
-    final response = await _supabase.auth.signInWithPassword(
-      email: email.trim(),
-      password: password,
-    );
+    AuthResponse response;
+    try {
+      response = await _supabase.auth.signInWithPassword(
+        email: email.trim(),
+        password: password,
+      );
+    } on AuthException catch (e) {
+      debugPrint('Sign-in failed [${e.code}]: ${e.message}');
+      rethrow;
+    }
 
     final user = response.user;
     if (user == null) {
       throw Exception('Login failed. Please check your credentials.');
     }
 
-    final data = await _supabase.from('profiles').select().eq('id', user.id).single();
-    final userModel = UserModel.fromJson(data);
-    await _cacheUser(userModel);
-    return userModel;
+    try {
+      final data = await _supabase.from('profiles').select().eq('id', user.id).single();
+      final userModel = UserModel.fromJson(data);
+      await _cacheUser(userModel);
+      return userModel;
+    } catch (e) {
+      debugPrint('Profile query failed during login, using fallback model: $e');
+      final userModel = UserModel(
+        id: user.id,
+        fullName: user.userMetadata?['full_name'] ?? user.userMetadata?['name'] ?? 'User',
+        email: user.email ?? email.trim(),
+        createdAt: DateTime.now(),
+      );
+      await _cacheUser(userModel);
+      return userModel;
+    }
   }
 
   @override
@@ -127,25 +174,45 @@ class SupabaseAuthService implements AuthService {
     required String password,
     required String fullName,
   }) async {
-    final response = await _supabase.auth.signUp(
-      email: email.trim(),
-      password: password,
-      data: {
-        'full_name': fullName.trim(),
-        'role': 'user',
-      },
-    );
+    AuthResponse response;
+    try {
+      response = await _supabase.auth.signUp(
+        email: email.trim(),
+        password: password,
+        data: {
+          'full_name': fullName.trim(),
+          'role': 'user',
+        },
+      );
+    } on AuthException catch (e) {
+      debugPrint('Sign-up failed [${e.code}]: ${e.message}');
+      rethrow;
+    }
 
     final user = response.user;
     if (user == null) {
-      throw Exception('Registration failed.');
+      throw Exception('Registration failed. Please try again.');
     }
 
-    // Wait for DB trigger to create profiles row
-    await Future.delayed(const Duration(milliseconds: 600));
+    if (response.session != null) {
+      // Wait briefly for DB trigger to create profiles row
+      await Future.delayed(const Duration(milliseconds: 600));
+      try {
+        final data = await _supabase.from('profiles').select().eq('id', user.id).single();
+        final userModel = UserModel.fromJson(data);
+        await _cacheUser(userModel);
+        return userModel;
+      } catch (e) {
+        debugPrint('Error querying profile after signup: $e');
+      }
+    }
 
-    final data = await _supabase.from('profiles').select().eq('id', user.id).single();
-    final userModel = UserModel.fromJson(data);
+    final userModel = UserModel(
+      id: user.id,
+      fullName: fullName.trim(),
+      email: user.email ?? email.trim(),
+      createdAt: DateTime.now(),
+    );
     await _cacheUser(userModel);
     return userModel;
   }
@@ -192,6 +259,12 @@ class SupabaseAuthService implements AuthService {
     final userModel = UserModel.fromJson(data);
     await _cacheUser(userModel);
     return userModel;
+  }
+
+  @override
+  Future<UserModel> uploadAndSetAvatar(File file) async {
+    final url = await CommunityService.instance.uploadProfilePhoto(file);
+    return updateProfile(avatarUrl: url);
   }
 
   @override

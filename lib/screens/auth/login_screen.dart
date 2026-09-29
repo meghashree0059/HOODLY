@@ -36,16 +36,17 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
     try {
       await AuthService.instance.signInWithEmailAndPassword(
-        email: _emailController.text,
+        email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       if (!mounted) return;
       context.go(AppRoutes.home);
     } catch (e) {
       if (!mounted) return;
+      final errorMessage = AppValidators.formatAuthError(e);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(e.toString().replaceAll('Exception:', '').trim()),
+          content: Text(errorMessage),
           backgroundColor: AppColors.error,
         ),
       );

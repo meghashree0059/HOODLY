@@ -13,4 +13,11 @@ abstract final class AppRoutes {
   static const String editProfile = '/profile/edit';
   static const String myBusinesses = '/profile/businesses';
   static const String settings = '/settings';
+
+  // Community Services routes
+  static const String communityServices = '/community';
+  static const String communityPostDetail = '/community/:id';
+  static const String createCommunityPost = '/community/create';
+  static const String editCommunityPost = '/community/edit/:id';
+  static const String myCommunityPosts = '/community/my-posts';
 }

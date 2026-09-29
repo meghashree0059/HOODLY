@@ -1,8 +1,8 @@
 /// Business listing model for the Hoodly app.
 class BusinessModel {
   final String id;
-  final String name;
   final String category;
+  final String name;
   final String description;
   final String address;
   final double latitude;
@@ -39,11 +39,11 @@ class BusinessModel {
   });
 
   factory BusinessModel.fromJson(Map<String, dynamic> json) {
-    // Resolve category name (handles join query and flat mock data)
+    // Resolve category name from joined categories table or flat field
     String categoryName = 'Other';
     if (json['categories'] != null) {
       if (json['categories'] is Map) {
-        categoryName = json['categories']['name'] as String? ?? 'Other';
+        categoryName = (json['categories'] as Map)['name'] as String? ?? 'Other';
       } else {
         categoryName = json['categories'].toString();
       }
@@ -51,14 +51,19 @@ class BusinessModel {
       categoryName = json['category'] as String;
     }
 
-    // Resolve images
+    // Resolve images from joined business_images or flat images list
     List<String> imagesList = [];
     if (json['business_images'] != null && json['business_images'] is List) {
       imagesList = (json['business_images'] as List)
-          .map((img) => (img is Map) ? (img['image_url'] as String? ?? '') : img.toString())
+          .map((img) {
+            if (img is Map) {
+              return img['image_url'] as String? ?? '';
+            }
+            return img.toString();
+          })
           .where((url) => url.isNotEmpty)
           .toList();
-    } else if (json['images'] != null) {
+    } else if (json['images'] != null && json['images'] is List) {
       imagesList = List<String>.from(json['images'] as List);
     }
 
@@ -66,6 +71,34 @@ class BusinessModel {
     String? mainImageUrl = json['image_url'] as String?;
     if ((mainImageUrl == null || mainImageUrl.isEmpty) && imagesList.isNotEmpty) {
       mainImageUrl = imagesList.first;
+    }
+
+    // is_active is the DB column name; is_open is used by the model/UI.
+    // Support both to handle DB records and mock data correctly.
+    final bool isOpen = json['is_active'] as bool? ??
+        json['is_open'] as bool? ??
+        true;
+
+    // Calculate rating and review count from direct fields or joined reviews list
+    double calculatedRating = (json['rating'] as num?)?.toDouble() ?? 0.0;
+    int calculatedReviewCount = json['review_count'] as int? ?? 0;
+
+    if (json['reviews'] != null && json['reviews'] is List) {
+      final reviewsList = json['reviews'] as List;
+      if (reviewsList.isNotEmpty) {
+        int totalStars = 0;
+        int count = 0;
+        for (final r in reviewsList) {
+          if (r is Map && r['rating'] != null) {
+            totalStars += (r['rating'] as num).toInt();
+            count++;
+          }
+        }
+        if (count > 0) {
+          calculatedRating = ((totalStars / count) * 10).round() / 10.0;
+          calculatedReviewCount = count;
+        }
+      }
     }
 
     return BusinessModel(
@@ -76,12 +109,12 @@ class BusinessModel {
       address: json['address'] as String? ?? '',
       latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
       longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
-      rating: (json['rating'] as num?)?.toDouble() ?? 0.0,
-      reviewCount: json['review_count'] as int? ?? 0,
+      rating: calculatedRating,
+      reviewCount: calculatedReviewCount,
       imageUrl: mainImageUrl,
       images: imagesList,
       tags: List<String>.from(json['tags'] as List? ?? []),
-      isOpen: json['is_open'] as bool? ?? true,
+      isOpen: isOpen,
       openHours: json['open_hours'] as String?,
       phone: json['phone'] as String?,
       website: json['website'] as String?,
@@ -149,6 +182,7 @@ class BusinessModel {
       );
 
   String get distanceLabel {
+    if (distanceKm <= 0.0) return 'Location unavailable';
     if (distanceKm < 1.0) return '${(distanceKm * 1000).round()}m away';
     return '${distanceKm.toStringAsFixed(1)}km away';
   }

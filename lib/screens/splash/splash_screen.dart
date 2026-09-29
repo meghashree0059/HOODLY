@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/constants/app_constants.dart';
 import '../../routes/app_routes.dart';
-import '../../services/auth_service.dart';
 import '../../services/storage_service.dart';
 
 /// Hoodly Splash Screen
@@ -188,14 +188,10 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _handleNavigation() async {
-    try {
-      final user = await AuthService.instance.currentUser;
-      if (user != null) {
-        if (mounted) context.go(AppRoutes.home);
-        return;
-      }
-    } catch (e) {
-      debugPrint('Error resolving session in splash: $e');
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session != null && !session.isExpired) {
+      if (mounted) context.go(AppRoutes.home);
+      return;
     }
 
     final storage = await StorageService.getInstance();

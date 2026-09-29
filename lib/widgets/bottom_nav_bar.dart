@@ -46,9 +46,9 @@ class HoodlyBottomNavBar extends StatelessWidget {
       label: 'Add',
     ),
     BottomNavItem(
-      icon: Icons.bookmark_border_rounded,
-      activeIcon: Icons.bookmark_rounded,
-      label: 'Bookmarks',
+      icon: Icons.groups_outlined,
+      activeIcon: Icons.groups_rounded,
+      label: 'Community',
     ),
     BottomNavItem(
       icon: Icons.person_outline_rounded,

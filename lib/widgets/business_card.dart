@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'hoodly_image.dart';
 import '../models/business_model.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_text_styles.dart';
@@ -126,14 +127,18 @@ class BusinessCard extends StatelessWidget {
                       color: AppColors.primary,
                     ),
                     const SizedBox(width: 4),
-                    Text(
-                      business.distanceLabel,
-                      style: AppTextStyles.labelMedium.copyWith(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
+                    Expanded(
+                      child: Text(
+                        business.distanceLabel,
+                        style: AppTextStyles.labelMedium.copyWith(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 4),
                     if (business.isOpen)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -192,12 +197,16 @@ class BusinessCard extends StatelessWidget {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          business.category.toUpperCase(),
-                          style: AppTextStyles.labelSmall.copyWith(
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
+                        Expanded(
+                          child: Text(
+                            business.category.toUpperCase(),
+                            style: AppTextStyles.labelSmall.copyWith(
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         if (business.isOpen)
@@ -238,11 +247,15 @@ class BusinessCard extends StatelessWidget {
                       color: AppColors.primary,
                     ),
                     const SizedBox(width: 4),
-                    Text(
-                      '${business.distanceLabel} • ${business.address.split(',').first}',
-                      style: AppTextStyles.labelMedium.copyWith(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
+                    Expanded(
+                      child: Text(
+                        '${business.distanceLabel} • ${business.address.split(',').first}',
+                        style: AppTextStyles.labelMedium.copyWith(
+                          color: AppColors.textSecondary,
+                          fontSize: 12,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -256,30 +269,11 @@ class BusinessCard extends StatelessWidget {
   }
 
   Widget _buildImage() {
-    if (business.imageUrl != null && business.imageUrl!.isNotEmpty) {
-      return Image.network(
-        business.imageUrl!,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => _buildPlaceholderImage(),
-        loadingBuilder: (context, child, loadingProgress) {
-          if (loadingProgress == null) return child;
-          return Container(
-            color: AppColors.surfaceVariant,
-            child: const Center(
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                ),
-              ),
-            ),
-          );
-        },
-      );
-    }
-    return _buildPlaceholderImage();
+    return HoodlyImage(
+      imageUrl: business.imageUrl,
+      fit: BoxFit.cover,
+      fallbackWidget: _buildPlaceholderImage(),
+    );
   }
 
   Widget _buildPlaceholderImage() {
